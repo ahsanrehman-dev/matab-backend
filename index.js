@@ -48,16 +48,10 @@ connectDB();
 // ===============================
 // 🔒 CORS Configuration (✅ Fixed)
 // ===============================
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",")
-  : [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:3000",
-    "https://matab-ecommerce-frontend.vercel.app",
-    "https://www.matabalshifa.com",
-    "https://matabalshifa.com"
-  ];
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 app.use(
   cors({
