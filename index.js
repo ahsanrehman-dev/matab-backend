@@ -46,32 +46,33 @@ const __dirname = path.dirname(__filename);
 connectDB();
 
 // ===============================
-// 🔒 CORS Configuration (✅ Fixed)
+// 🔒 CORS Configuration
 // ===============================
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
-  .map((origin) => origin.trim())
+  .map((origin) => origin.trim().replace(/\/+$/, ""))
   .filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like Postman)
+      // Allow requests with no origin (like Postman / server-to-server)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS not allowed for origin: ${origin}`));
+
+      const normalizedOrigin = origin.replace(/\/+$/, "");
+      if (allowedOrigins.includes(normalizedOrigin)) {
+        return callback(null, true);
       }
+
+      console.warn(`Blocked CORS origin: ${origin}`);
+      return callback(new Error(`CORS not allowed for origin: ${origin}`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
   })
 );
-
-// Handle preflight requests
-app.options("*", cors());
 
 // ===============================
 // 🛡️ Security Middleware
@@ -157,4 +158,5 @@ app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`🔓 Allowed CORS origins: ${allowedOrigins.join(", ")}`);
 });
