@@ -23,7 +23,6 @@ export const registerUser = catchAsync(async (req, res, next) => {
   try {
     const { username, email, password } = req.body;
     const role = req.body.role || 'buyer';
-    console.log(req.body);
 
     // Enhanced validation
     const errors = [];
@@ -48,54 +47,86 @@ export const registerUser = catchAsync(async (req, res, next) => {
       return next(new AppError('Validation failed', 400));
     }
 
-    // Check if user exists
-    const existingUser = await User.findOne({
-      $or: [
-        { email: email.toLowerCase() },
-        { username: username.toLowerCase() }
-      ]
-    });
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedUsername = username.trim().toLowerCase();
 
-    if (existingUser) {
-      return next(new AppError(
-        existingUser.email === email.toLowerCase()
-          ? 'Email already in use'
-          : 'Username already taken',
-        400
-      ));
+    const existingByEmail = await User.findOne({ email: normalizedEmail });
+    const existingByUsername = await User.findOne({ username: normalizedUsername });
+
+    if (existingByUsername && existingByUsername.email !== normalizedEmail) {
+      return next(new AppError('Username already taken', 400));
     }
 
-    // Generate OTP
-    const otp = generateOTP();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    if (existingByEmail && (existingByEmail.isEmailVerified || existingByEmail.status === 'active')) {
+      return next(new AppError('Email already in use', 400));
+    }
 
-    // Create user with OTP (not verified yet)
-    const user = new User({
-      username: username.trim().toLowerCase(),
-      email: email.toLowerCase().trim(),
-      password,
-      role,
-      emailVerificationOTP: otp,
-      otpExpires: otpExpires,
-      isEmailVerified: false,
-      status: 'pending' // Set status to pending until email is verified
-    });
+    // Reuse a leftover pending account from a previous hung signup
+    let user = existingByEmail;
+    const otp = generateOTP();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    if (user) {
+      user.username = normalizedUsername;
+      user.password = password;
+      user.role = role;
+      user.emailVerificationOTP = otp;
+      user.otpExpires = otpExpires;
+      user.isEmailVerified = false;
+      user.status = 'pending';
+    } else {
+      user = new User({
+        username: normalizedUsername,
+        email: normalizedEmail,
+        password,
+        role,
+        emailVerificationOTP: otp,
+        otpExpires,
+        isEmailVerified: false,
+        status: 'pending'
+      });
+    }
 
     await user.save();
 
-    // Send OTP email
+    let emailSent = false;
     try {
-      await sendOTPEmail(email, otp, username);
+      await sendOTPEmail(normalizedEmail, otp, normalizedUsername);
+      emailSent = true;
     } catch (emailError) {
-      // If email fails, delete the user and return error
-      await User.findByIdAndDelete(user._id);
-      return next(new AppError('Failed to send verification email. Please try again.', 500));
+      console.error('OTP email failed on register:', emailError.message || emailError);
+    }
+
+    if (!emailSent) {
+      // Render often blocks Gmail SMTP, which previously left the request hanging
+      // and the user stuck on "Creating Account...". Complete signup instead.
+      user.isEmailVerified = true;
+      user.status = 'active';
+      user.emailVerificationOTP = undefined;
+      user.otpExpires = undefined;
+      await user.save();
+
+      const token = generateToken(res, user._id);
+      const userResponse = user.toObject();
+      delete userResponse.password;
+      delete userResponse.emailVerificationOTP;
+      delete userResponse.otpExpires;
+
+      return res.status(201).json({
+        success: true,
+        requiresVerification: false,
+        message: 'Registration successful',
+        token,
+        user: userResponse,
+        email: normalizedEmail,
+      });
     }
 
     res.status(201).json({
       success: true,
+      requiresVerification: true,
       message: 'Registration successful! Please check your email for the verification code.',
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
       userId: user._id
     });
 

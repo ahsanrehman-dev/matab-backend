@@ -53,22 +53,25 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .map((origin) => origin.trim().replace(/\/+$/, ""))
   .filter(Boolean);
 
+console.log("Allowed CORS origins:", allowedOrigins);
+
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like Postman / server-to-server)
-      if (!origin) return callback(null, true);
-
-      const normalizedOrigin = origin.replace(/\/+$/, "");
-      if (allowedOrigins.includes(normalizedOrigin)) {
+    origin(origin, callback) {
+      // Non-browser clients (curl, server-to-server) send no Origin header
+      if (!origin) {
         return callback(null, true);
       }
 
-      console.warn(`Blocked CORS origin: ${origin}`);
-      return callback(new Error(`CORS not allowed for origin: ${origin}`));
+      const normalized = origin.replace(/\/+$/, "");
+      if (allowedOrigins.length === 0 || allowedOrigins.includes(normalized)) {
+        return callback(null, true);
+      }
+
+      return callback(null, false);
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     optionsSuccessStatus: 204,
   })
@@ -159,4 +162,9 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`🔓 Allowed CORS origins: ${allowedOrigins.join(", ")}`);
+  console.log(
+    `📧 Email configured: ${Boolean(
+      process.env.EMAIL_USER && (process.env.EMAIL_PASSWORD || "").replace(/\s/g, "")
+    )}`
+  );
 });

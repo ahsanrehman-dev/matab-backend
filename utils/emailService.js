@@ -1,14 +1,56 @@
 import nodemailer from 'nodemailer';
 
-// Create transporter with Gmail configuration
+const EMAIL_TIMEOUT_MS = 8000;
+
+const withTimeout = (promise, ms, message) => {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
+export const isEmailConfigured = () => {
+  const user = process.env.EMAIL_USER;
+  const pass = (process.env.EMAIL_PASSWORD || '').replace(/\s/g, '');
+  return Boolean(user && pass);
+};
+
+// Explicit SMTP (port 587) so nodemailer timeouts actually apply.
+// `service: 'gmail'` often hangs forever on Render when outbound SMTP is blocked.
 const createTransporter = () => {
+  if (!isEmailConfigured()) {
+    throw new Error('Email is not configured');
+  }
+
   return nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    requireTLS: true,
     auth: {
       user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD,
+      pass: (process.env.EMAIL_PASSWORD || '').replace(/\s/g, ''),
     },
+    connectionTimeout: EMAIL_TIMEOUT_MS,
+    greetingTimeout: EMAIL_TIMEOUT_MS,
+    socketTimeout: EMAIL_TIMEOUT_MS,
   });
+};
+
+const sendMail = async (mailOptions) => {
+  const transporter = createTransporter();
+  try {
+    return await withTimeout(
+      transporter.sendMail(mailOptions),
+      EMAIL_TIMEOUT_MS,
+      'Email send timed out'
+    );
+  } finally {
+    transporter.close();
+  }
 };
 
 // Generate a 6-digit OTP
@@ -19,8 +61,6 @@ export const generateOTP = () => {
 // Send OTP email
 export const sendOTPEmail = async (email, otp, username) => {
   try {
-    const transporter = createTransporter();
-
     const mailOptions = {
       from: `"E-Process" <${process.env.EMAIL_USER}>`,
       to: email,
@@ -122,11 +162,11 @@ export const sendOTPEmail = async (email, otp, username) => {
       `,
     };
 
-    const info = await transporter.sendMail(mailOptions);
+    const info = await sendMail(mailOptions);
     console.log('✅ Email sent successfully:', info.messageId);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error('❌ Email sending failed:', error);
+    console.error('❌ Email sending failed:', error.message || error);
     throw new Error('Failed to send verification email');
   }
 };
@@ -134,8 +174,6 @@ export const sendOTPEmail = async (email, otp, username) => {
 // Send welcome email after successful verification
 export const sendWelcomeEmail = async (email, username) => {
   try {
-    const transporter = createTransporter();
-
     const mailOptions = {
       from: `"E-Process" <${process.env.EMAIL_USER}>`,
       to: email,
@@ -226,10 +264,10 @@ export const sendWelcomeEmail = async (email, username) => {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendMail(mailOptions);
     console.log('✅ Welcome email sent successfully');
   } catch (error) {
-    console.error('❌ Welcome email failed:', error);
+    console.error('❌ Welcome email failed:', error.message || error);
     // Don't throw error for welcome email, it's not critical
   }
 };
@@ -237,8 +275,6 @@ export const sendWelcomeEmail = async (email, username) => {
 // Send password reset email
 export const sendPasswordResetEmail = async (email, resetUrl) => {
   try {
-    const transporter = createTransporter();
-
     const mailOptions = {
       from: `"E-Process" <${process.env.EMAIL_USER}>`,
       to: email,
@@ -275,10 +311,10 @@ export const sendPasswordResetEmail = async (email, resetUrl) => {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendMail(mailOptions);
     console.log('✅ Password reset email sent successfully');
   } catch (error) {
-    console.error('❌ Password reset email failed:', error);
+    console.error('❌ Password reset email failed:', error.message || error);
     throw new Error('Email could not be sent');
   }
 };
