@@ -84,7 +84,14 @@ const OrderSchema = new mongoose.Schema(
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: [true, "User is required"],
+      required: function () {
+        return !this.isGuest;
+      },
+      index: true,
+    },
+    isGuest: {
+      type: Boolean,
+      default: false,
       index: true,
     },
     items: {

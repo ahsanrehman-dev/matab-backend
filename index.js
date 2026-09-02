@@ -11,7 +11,7 @@ import userRoutes from "./routes/userRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import cartRoutes from "./routes/cartRoutes.js";
-import orderRoutes from "./routes/orderRoutes.js";
+import orderRoutes, { publicOrderRouter } from "./routes/orderRoutes.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import {
   securityHeaders,
@@ -81,8 +81,6 @@ app.use(
 // 🛡️ Security Middleware
 // ===============================
 app.use(securityHeaders);
-app.use(xssProtection);
-app.use(mongoSanitization);
 
 // ===============================
 // 📦 Body Parsing Middleware
@@ -103,6 +101,9 @@ app.use(
   })
 );
 
+app.use(xssProtection);
+app.use(mongoSanitization);
+
 // ===============================
 // 📝 Request Logging
 // ===============================
@@ -118,6 +119,7 @@ app.use("/uploads", express.static(uploadsDir));
 // 🔗 Routes
 // ===============================
 app.use("/api/auth", authRoutes);
+app.use("/api/orders", publicOrderRouter);
 app.use("/api/user", userRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/user/orders", orderRoutes);

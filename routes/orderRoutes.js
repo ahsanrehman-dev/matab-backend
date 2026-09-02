@@ -2,6 +2,7 @@ import express from 'express';
 import { protect } from '../middleware/authMiddleware.js';
 import {
     createOrder,
+    createGuestOrder,
     getUserOrders,
     getOrder,
     cancelOrder,
@@ -9,9 +10,12 @@ import {
     getOrderStats
 } from '../controllers/orderController.js';
 
+export const publicOrderRouter = express.Router();
+publicOrderRouter.post('/guest', createGuestOrder);
+
 const router = express.Router();
 
-// All order routes require authentication
+// All authenticated order routes require a token
 router.use(protect);
 
 // Order statistics

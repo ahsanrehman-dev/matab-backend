@@ -4,25 +4,130 @@ import Product from '../models/product.js';
 import mongoose from 'mongoose';
 import { AppError, catchAsync } from '../middleware/errorHandler.js';
 
-// @desc    Create new order
-// @route   POST /api/user/orders
-// @access  Private
-export const createOrder = catchAsync(async (req, res, next) => {
-    const { shippingAddress, paymentMethod = 'cash_on_delivery', notes = '' } = req.body;
+const getProductId = (item) =>
+    item?.product?._id || item?.product || item?.productId || null;
 
-    // Validate shipping address (postal code is optional for COD in Pakistan)
+const restoreStock = async (deducted) => {
+    await Promise.all(
+        deducted.map(({ productId, quantity }) =>
+            Product.findByIdAndUpdate(productId, { $inc: { quantity } })
+        )
+    );
+};
+
+const reduceStock = async (items) => {
+    const deducted = [];
+
+    try {
+        for (const item of items) {
+            const productId = getProductId(item);
+            const qty = Number(item.quantity);
+
+            if (!productId || !Number.isFinite(qty) || qty < 1) {
+                throw new AppError('Invalid order item', 400);
+            }
+
+            const updated = await Product.findOneAndUpdate(
+                { _id: productId, quantity: { $gte: qty } },
+                { $inc: { quantity: -qty } },
+                { new: true }
+            );
+
+            if (!updated) {
+                const product = await Product.findById(productId).select('name quantity');
+                throw new AppError(
+                    product
+                        ? `${product.name} has only ${product.quantity} left in stock`
+                        : 'A product in your order is no longer available',
+                    400
+                );
+            }
+
+            deducted.push({ productId, quantity: qty });
+        }
+
+        return deducted;
+    } catch (error) {
+        await restoreStock(deducted);
+        throw error;
+    }
+};
+
+const normalizeShippingAddress = (shippingAddress) => {
     if (!shippingAddress || !shippingAddress.firstName || !shippingAddress.lastName ||
         !shippingAddress.street || !shippingAddress.city || !shippingAddress.state ||
         !shippingAddress.phone || !shippingAddress.email) {
-        return next(new AppError('Complete shipping address is required', 400));
+        return null;
     }
 
     if (!shippingAddress.zipCode?.trim()) {
         shippingAddress.zipCode = 'N/A';
     }
 
-    // Get user's cart
-    const cart = await Cart.findOne({ user: req.user.id })
+    return shippingAddress;
+};
+
+const calculateTotals = (items) => {
+    const subtotal = items.reduce((total, item) => {
+        return total + (item.price * item.quantity);
+    }, 0);
+
+    const shippingCost = subtotal > 5000 ? 0 : 200;
+    const tax = Math.round(subtotal * 0.05);
+    const total = subtotal + shippingCost + tax;
+
+    return { subtotal, shippingCost, tax, total };
+};
+
+const saveOrderAndReduceStock = async ({ userId, isGuest, items, shippingAddress, paymentMethod, notes }) => {
+    const totals = calculateTotals(items);
+    const deducted = await reduceStock(items);
+
+    try {
+        const order = new Order({
+            user: userId || undefined,
+            isGuest: Boolean(isGuest),
+            items: items.map((item) => ({
+                product: getProductId(item),
+                quantity: item.quantity,
+                price: item.price,
+                total: item.price * item.quantity
+            })),
+            shippingAddress,
+            paymentMethod,
+            ...totals,
+            notes,
+            status: 'pending',
+            paymentStatus: 'pending'
+        });
+
+        await order.save();
+        return order;
+    } catch (error) {
+        await restoreStock(deducted);
+        throw error;
+    }
+};
+
+const populateOrder = (order) =>
+    order.populate({
+        path: 'items.product',
+        select: 'name price images category brand'
+    });
+
+// @desc    Create new order from the logged-in user's cart
+// @route   POST /api/user/orders
+// @access  Private
+export const createOrder = catchAsync(async (req, res, next) => {
+    const { shippingAddress, paymentMethod = 'cash_on_delivery', notes = '' } = req.body;
+
+    const normalizedAddress = normalizeShippingAddress(shippingAddress);
+    if (!normalizedAddress) {
+        return next(new AppError('Complete shipping address is required', 400));
+    }
+
+    const userId = req.user._id;
+    const cart = await Cart.findOne({ user: userId })
         .populate({
             path: 'items.product',
             select: 'name price status quantity images category brand'
@@ -32,8 +137,9 @@ export const createOrder = catchAsync(async (req, res, next) => {
         return next(new AppError('Cart is empty', 400));
     }
 
-    // Validate all products are still available
     const unavailableProducts = [];
+    const orderItems = [];
+
     for (const item of cart.items) {
         if (!item.product || item.product.status !== 'active') {
             unavailableProducts.push(item.product?.name || 'Unknown product');
@@ -42,7 +148,14 @@ export const createOrder = catchAsync(async (req, res, next) => {
 
         if (item.product.quantity < item.quantity) {
             unavailableProducts.push(`${item.product.name} (only ${item.product.quantity} available)`);
+            continue;
         }
+
+        orderItems.push({
+            product: item.product._id,
+            quantity: item.quantity,
+            price: item.product.price
+        });
     }
 
     if (unavailableProducts.length > 0) {
@@ -52,53 +165,83 @@ export const createOrder = catchAsync(async (req, res, next) => {
         ));
     }
 
-    // Calculate totals
-    const subtotal = cart.items.reduce((total, item) => {
-        return total + (item.product.price * item.quantity);
-    }, 0);
-
-    const shippingCost = subtotal > 5000 ? 0 : 200; // Free shipping over 5000 PKR
-    const tax = Math.round(subtotal * 0.05); // 5% tax
-    const total = subtotal + shippingCost + tax;
-
-    // Create order
-    const order = new Order({
-        user: req.user.id,
-        items: cart.items.map(item => ({
-            product: item.product._id,
-            quantity: item.quantity,
-            price: item.product.price,
-            total: item.product.price * item.quantity
-        })),
-        shippingAddress,
+    const order = await saveOrderAndReduceStock({
+        userId,
+        isGuest: false,
+        items: orderItems,
+        shippingAddress: normalizedAddress,
         paymentMethod,
-        subtotal,
-        shippingCost,
-        tax,
-        total,
-        notes,
-        status: 'pending',
-        paymentStatus: paymentMethod === 'cash_on_delivery' ? 'pending' : 'pending'
+        notes
     });
 
-    await order.save();
+    await cart.clear();
+    await populateOrder(order);
 
-    // Reduce product quantities
-    for (const item of cart.items) {
-        await Product.findByIdAndUpdate(
-            item.product._id,
-            { $inc: { quantity: -item.quantity } }
-        );
+    res.status(201).json({
+        success: true,
+        message: 'Order created successfully',
+        order
+    });
+});
+
+// @desc    Create guest order and reduce stock
+// @route   POST /api/orders/guest
+// @access  Public
+export const createGuestOrder = catchAsync(async (req, res, next) => {
+    const { shippingAddress, paymentMethod = 'cash_on_delivery', notes = '', items } = req.body;
+
+    const normalizedAddress = normalizeShippingAddress(shippingAddress);
+    if (!normalizedAddress) {
+        return next(new AppError('Complete shipping address is required', 400));
     }
 
-    // Clear cart after successful order
-    await cart.clear();
+    if (!Array.isArray(items) || items.length === 0) {
+        return next(new AppError('Order items are required', 400));
+    }
 
-    // Populate order with product details
-    await order.populate({
-        path: 'items.product',
-        select: 'name price images category brand'
+    if (items.length > 50) {
+        return next(new AppError('Too many items in this order', 400));
+    }
+
+    const orderItems = [];
+
+    for (const item of items) {
+        const productId = getProductId(item);
+        const quantity = Number(item.quantity);
+
+        if (!mongoose.Types.ObjectId.isValid(productId) || !Number.isFinite(quantity) || quantity < 1 || quantity > 100) {
+            return next(new AppError('Invalid order item', 400));
+        }
+
+        const product = await Product.findById(productId).select('name price status quantity');
+        if (!product || product.status !== 'active') {
+            return next(new AppError('A product in your order is no longer available', 400));
+        }
+
+        if (product.quantity < quantity) {
+            return next(new AppError(
+                `${product.name} (only ${product.quantity} available)`,
+                400
+            ));
+        }
+
+        orderItems.push({
+            product: product._id,
+            quantity,
+            price: product.price
+        });
+    }
+
+    const order = await saveOrderAndReduceStock({
+        userId: undefined,
+        isGuest: true,
+        items: orderItems,
+        shippingAddress: normalizedAddress,
+        paymentMethod,
+        notes
     });
+
+    await populateOrder(order);
 
     res.status(201).json({
         success: true,
@@ -115,7 +258,7 @@ export const getUserOrders = catchAsync(async (req, res, next) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Build filter
-    const filter = { user: req.user.id };
+    const filter = { user: req.user._id };
     if (status) {
         filter.status = status;
     }
@@ -150,7 +293,7 @@ export const getUserOrders = catchAsync(async (req, res, next) => {
 export const getOrder = catchAsync(async (req, res, next) => {
     const order = await Order.findOne({
         _id: req.params.id,
-        user: req.user.id
+        user: req.user._id
     }).populate({
         path: 'items.product',
         select: 'name price images category brand'
@@ -172,7 +315,7 @@ export const getOrder = catchAsync(async (req, res, next) => {
 export const cancelOrder = catchAsync(async (req, res, next) => {
     const order = await Order.findOne({
         _id: req.params.id,
-        user: req.user.id
+        user: req.user._id
     });
 
     if (!order) {
@@ -184,15 +327,13 @@ export const cancelOrder = catchAsync(async (req, res, next) => {
         return next(new AppError('Order cannot be cancelled at this stage', 400));
     }
 
-    // Restore product quantities
-    for (const item of order.items) {
-        await Product.findByIdAndUpdate(
-            item.product,
-            { $inc: { quantity: item.quantity } }
-        );
-    }
+    await restoreStock(
+        order.items.map((item) => ({
+            productId: getProductId(item),
+            quantity: item.quantity
+        }))
+    );
 
-    // Update order status
     order.status = 'cancelled';
     order.paymentStatus = 'refunded';
     await order.save();
@@ -227,7 +368,7 @@ export const getOrderStatusOptions = catchAsync(async (req, res, next) => {
 // @route   GET /api/user/orders/stats
 // @access  Private
 export const getOrderStats = catchAsync(async (req, res, next) => {
-    const userId = req.user.id;
+    const userId = req.user._id;
 
     const stats = await Order.aggregate([
         { $match: { user: new mongoose.Types.ObjectId(userId) } },

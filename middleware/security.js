@@ -72,24 +72,25 @@ export const xssProtection = (req, res, next) => {
 // NoSQL injection protection
 export const mongoSanitization = (req, res, next) => {
     const sanitize = (obj) => {
-        if (typeof obj === 'string') {
-            return obj.replace(/\$/g, '').replace(/\./g, '');
+        if (Array.isArray(obj)) {
+            return obj.map(sanitize);
         }
         if (typeof obj === 'object' && obj !== null) {
-            for (let key in obj) {
+            const clean = {};
+            for (const key of Object.keys(obj)) {
                 if (key.startsWith('$') || key.includes('.')) {
-                    delete obj[key];
-                } else {
-                    obj[key] = sanitize(obj[key]);
+                    continue;
                 }
+                clean[key] = sanitize(obj[key]);
             }
+            return clean;
         }
         return obj;
     };
 
-    req.body = sanitize(req.body);
-    req.query = sanitize(req.query);
-    req.params = sanitize(req.params);
+    if (req.body) req.body = sanitize(req.body);
+    if (req.query) req.query = sanitize(req.query);
+    if (req.params) req.params = sanitize(req.params);
     next();
 };
 
