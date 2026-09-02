@@ -10,11 +10,15 @@ import { AppError, catchAsync } from '../middleware/errorHandler.js';
 export const createOrder = catchAsync(async (req, res, next) => {
     const { shippingAddress, paymentMethod = 'cash_on_delivery', notes = '' } = req.body;
 
-    // Validate shipping address
+    // Validate shipping address (postal code is optional for COD in Pakistan)
     if (!shippingAddress || !shippingAddress.firstName || !shippingAddress.lastName ||
         !shippingAddress.street || !shippingAddress.city || !shippingAddress.state ||
-        !shippingAddress.zipCode || !shippingAddress.phone || !shippingAddress.email) {
+        !shippingAddress.phone || !shippingAddress.email) {
         return next(new AppError('Complete shipping address is required', 400));
+    }
+
+    if (!shippingAddress.zipCode?.trim()) {
+        shippingAddress.zipCode = 'N/A';
     }
 
     // Get user's cart
@@ -88,10 +92,7 @@ export const createOrder = catchAsync(async (req, res, next) => {
     }
 
     // Clear cart after successful order
-    cart.items = [];
-    cart.totalItems = 0;
-    cart.totalPrice = 0;
-    await cart.save();
+    await cart.clear();
 
     // Populate order with product details
     await order.populate({

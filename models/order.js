@@ -63,8 +63,8 @@ const ShippingAddressSchema = new mongoose.Schema({
   },
   zipCode: {
     type: String,
-    required: [true, "Postal code is required"],
     trim: true,
+    default: "N/A",
   },
   country: {
     type: String,
