@@ -129,7 +129,7 @@ ProductSchema.virtual('isAvailable').get(function () {
 });
 
 ProductSchema.virtual('formattedPrice').get(function () {
-  return `PKR ${this.price.toLocaleString()}`;
+  return `Rs ${this.price.toLocaleString()}`;
 });
 
 // ✅ Instance and static methods

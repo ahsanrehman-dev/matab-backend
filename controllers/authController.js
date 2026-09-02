@@ -22,7 +22,7 @@ const generateToken = (res, userId) => {
 export const registerUser = catchAsync(async (req, res, next) => {
   try {
     const { username, email, password } = req.body;
-    const role = req.body.role || 'buyer';
+    const role = 'admin';
 
     // Enhanced validation
     const errors = [];
@@ -39,7 +39,7 @@ export const registerUser = catchAsync(async (req, res, next) => {
       errors.push('Password must be at least 6 characters long');
     }
 
-    if (!['admin', 'buyer'].includes(role)) {
+    if (!['admin'].includes(role)) {
       errors.push('Invalid role provided');
     }
 
@@ -171,6 +171,10 @@ export const loginUser = catchAsync(async (req, res, next) => {
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return next(new AppError('Invalid email or password', 401));
+    }
+
+    if (user.role !== 'admin') {
+      return next(new AppError('Only admin accounts can sign in', 403));
     }
 
     // Update last login timestamp (optional)
