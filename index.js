@@ -167,6 +167,8 @@ app.listen(PORT, () => {
   console.log(
     `📧 Email configured: ${Boolean(
       process.env.EMAIL_USER && (process.env.EMAIL_PASSWORD || "").replace(/\s/g, "")
+    )}; admin order alerts: ${Boolean(
+      process.env.ADMIN_EMAIL || process.env.EMAIL_USER
     )}`
   );
 });

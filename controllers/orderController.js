@@ -3,6 +3,7 @@ import Cart from '../models/cart.js';
 import Product from '../models/product.js';
 import mongoose from 'mongoose';
 import { AppError, catchAsync } from '../middleware/errorHandler.js';
+import { sendAdminOrderNotification } from '../utils/orderEmail.js';
 
 const getProductId = (item) =>
     item?.product?._id || item?.product || item?.productId || null;
@@ -115,6 +116,14 @@ const populateOrder = (order) =>
         select: 'name price images category brand'
     });
 
+const notifyAdminAfterOrderCreated = async (order) => {
+    try {
+        await sendAdminOrderNotification(order);
+    } catch (error) {
+        console.error('Admin order notification failed:', error.message || error);
+    }
+};
+
 // @desc    Create new order from the logged-in user's cart
 // @route   POST /api/user/orders
 // @access  Private
@@ -176,6 +185,7 @@ export const createOrder = catchAsync(async (req, res, next) => {
 
     await cart.clear();
     await populateOrder(order);
+    await notifyAdminAfterOrderCreated(order);
 
     res.status(201).json({
         success: true,
@@ -242,6 +252,7 @@ export const createGuestOrder = catchAsync(async (req, res, next) => {
     });
 
     await populateOrder(order);
+    await notifyAdminAfterOrderCreated(order);
 
     res.status(201).json({
         success: true,

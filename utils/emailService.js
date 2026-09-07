@@ -53,6 +53,22 @@ const sendMail = async (mailOptions) => {
   }
 };
 
+export const sendTransactionalEmail = async ({
+  to,
+  subject,
+  html,
+  text,
+  fromName = 'Matab',
+}) => {
+  return sendMail({
+    from: `"${fromName}" <${process.env.EMAIL_USER}>`,
+    to,
+    subject,
+    html,
+    text,
+  });
+};
+
 // Generate a 6-digit OTP
 export const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
